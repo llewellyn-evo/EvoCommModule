@@ -42,6 +42,8 @@ namespace Power
       DUNE::Hardware::GPIO* m_gpio[MAX_CHANNELS];
       //! Temperature Pressure Humidity
       double m_temperature , m_pressure , m_humidity;
+      //! epoch of last serial update
+      double m_last_serial_update;
 
       CommModule(Tasks::Task* task ,SerialPort* handle, Channels* channels):
       m_task(task),
@@ -85,7 +87,7 @@ namespace Power
         return 0;
       }
       //! This needs to change once firmware for Cortex is finalised
-      void
+      uint8_t
       pollSerialInput()
       {
       	static uint8_t bfr[256];
@@ -121,13 +123,27 @@ namespace Power
               }
               if (tokens.size() > 3)
               {
-                m_temperature = std::stod(tokens[1]);
+                IMC::RelativeHumidity hum;
+                IMC::Temperature temp;
+                IMC::Pressure pres;
+                temp.value = m_temperature = std::stod(tokens[1]);
+                m_task->dispatch(temp);
                 m_pressure = std::stod(tokens[2]);
-                m_humidity = std::stod(tokens[3]);
+                pres.value = m_pressure / 100.0;
+                m_task->dispatch(pres);
+                hum.value = m_humidity = std::stod(tokens[3]);
+                m_task->dispatch(hum);
+                m_last_serial_update = Clock::getSinceEpoch();
               }
             }   
           }
         }
+        else if ((Clock::getSinceEpoch() - m_last_serial_update) > 5.0 )
+        {
+          return 1;
+        }
+
+        return 0;
       }
     };
   }

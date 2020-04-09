@@ -336,7 +336,10 @@ namespace Power
       {
         while (!stopping())
         {
-          m_comm_module->pollSerialInput();
+          if (m_comm_module->pollSerialInput())
+          {
+            setEntityState(IMC::EntityState::ESTA_ERROR, Utils::String::str(DTR("Serial Error")));
+          }
           if (m_args.tcp_port > 0 && m_poll.poll(0.005))
           {
             checkMainSocket();
