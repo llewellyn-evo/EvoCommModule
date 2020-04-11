@@ -47,10 +47,6 @@ namespace Power
       unsigned uart_baud;
       //! Array of channels 
       Channels channel[MAX_CHANNELS];
-      //! TCP listening port.
-      unsigned tcp_port;
-      //! timer for TCP client async data
-      double tcp_data_timer;
     };
 
     struct Task: public DUNE::Tasks::Task
@@ -63,20 +59,11 @@ namespace Power
       Arguments m_args;
       //! Serial port handle.
       SerialPort* m_handle;
-      // Socket handle.
-      TCPSocket* m_sock;
-      // I/O Multiplexer.
-      Poll m_poll;
-      // Clients.
-      std::list<TCPSocket*> m_clients;
-      //! Timer to send data to clients
-      DUNE::Time::Counter<float> m_client_data_timer;
 
       Task(const std::string& name, Tasks::Context& ctx):
         DUNE::Tasks::Task(name, ctx),
         m_comm_module(NULL),
-        m_handle(NULL),
-        m_sock(NULL)
+        m_handle(NULL)
       {
         param("Serial Port - Device", m_args.uart_dev)
         .defaultValue("/dev/ttymxc6")
@@ -85,14 +72,6 @@ namespace Power
         param("Serial Port - Baud Rate", m_args.uart_baud)
         .defaultValue("115200")
         .description("Serial port baud rate");
-
-        param("TCP - Port", m_args.tcp_port)
-        .defaultValue("0")
-        .description("TCP port to listen on");
-
-        param("TCP Data Timer", m_args.tcp_data_timer)
-        .defaultValue("2.0")
-        .description("Time between async TCP data");
 
         for (unsigned i = 0; i < MAX_CHANNELS; ++i)
         {
@@ -138,54 +117,19 @@ namespace Power
         {
           m_comm_module = new CommModule(this , m_handle , m_args.channel);
         }
-
-        if (m_args.tcp_port > 0)
-        {
-          try
-          {
-            m_sock = new TCPSocket;
-          }
-          catch (std::runtime_error& e)
-          {
-            throw RestartNeeded(e.what(), 30);
-          }
-        }
       }
 
       //! Initialize resources.
       void
       onResourceInitialization(void)
       {
-        if (m_sock != NULL)
-        {
-          m_sock->bind(m_args.tcp_port);
-          m_sock->listen(1024);
-          m_sock->setNoDelay(true);
-          m_poll.add(*m_sock);
-          this->inf("Listening on 0.0.0.0:%d" , m_args.tcp_port);
-          m_client_data_timer.setTop(2);
-        }
+        
       }
 
       //! Release resources.
       void
       onResourceRelease(void)
       {
-        if (m_sock != NULL)
-        {
-          m_poll.remove(*m_sock);
-          delete m_sock;
-          m_sock = NULL;
-
-
-          std::list<TCPSocket*>::iterator itr = m_clients.begin();
-          for (; itr != m_clients.end(); ++itr)
-          {
-            m_poll.remove(*(*itr));
-            delete *itr;
-          }
-          m_clients.clear();
-        }
       }
 
 
@@ -229,107 +173,6 @@ namespace Power
         }
       }
 
-      void
-      checkMainSocket(void)
-      {
-        if (m_poll.wasTriggered(*m_sock))
-        {
-          this->inf(DTR("accepting connection request"));
-          try
-          {
-            TCPSocket* nc = m_sock->accept();
-            m_clients.push_back(nc);
-            m_poll.add(*nc);
-          }
-          catch (std::runtime_error& e)
-          {
-            err("%s", e.what());
-          }
-        }
-      }
-
-      void
-      checkClientSockets(void)
-      {
-        char bfr[512];
-        char command_resp[10] = "ERROR\r\n";
-
-        std::list<TCPSocket*>::iterator itr = m_clients.begin();
-        while (itr != m_clients.end())
-        {
-          if (m_poll.wasTriggered(*(*itr)))
-          {
-            try
-            {
-              int rv = (*itr)->read(bfr, sizeof(bfr));
-              if (rv > 0 && bfr[0] == '$')
-              {
-                std::string s(bfr);
-                for(uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
-                {
-                  if (s.find(m_args.channel[i].name) != std::string::npos)
-                  {
-                    std::vector<std::string> tokens;
-                    std::istringstream ss(s);
-                    std::string token;
-                    while(std::getline(ss, token, ','))
-                    {
-                      tokens.push_back(token);
-                    }
-                    if (tokens.size() == 2)
-                    {
-                      int val = std::stoi(tokens[1]);
-                      if ((val == 1 || val == 0) && (!m_comm_module->setChannel(i , val)))
-                      {
-                        memset(command_resp , 0 , sizeof(command_resp));
-                        strcpy(command_resp , "OK\r\n");
-                      }
-                    }
-                  }
-                }
-              }
-              (*itr)->write(command_resp, (unsigned)strlen(command_resp));
-              //! Return Value Here
-            }
-            catch (Network::ConnectionClosed& e)
-            {
-              (void)e;
-              m_poll.remove(*(*itr));
-              delete *itr;
-              itr = m_clients.erase(itr);
-              continue;
-            }
-            catch (std::runtime_error& e)
-            {
-              err("%s", e.what());
-            }
-          }
-          ++itr;
-        }
-      }
-
-      //! Dispatch data to all TCP clients
-      void
-      dispatchToClients(const char* bfr, unsigned bfr_len)
-      {
-        std::list<TCPSocket*>::iterator itr = m_clients.begin();
-        while (itr != m_clients.end())
-        {
-          try
-          {
-            (*itr)->write(bfr, bfr_len);
-            ++itr;
-          }
-          catch (std::runtime_error& e)
-          {
-            err("%s", e.what());
-            m_poll.remove(*(*itr));
-            delete *itr;
-            itr = m_clients.erase(itr);
-          }
-        }
-      }
-
       //! Main loop.
       void
       onMain(void)
@@ -339,18 +182,6 @@ namespace Power
           if (m_comm_module->pollSerialInput())
           {
             setEntityState(IMC::EntityState::ESTA_ERROR, Utils::String::str(DTR("Serial Error")));
-          }
-          if (m_args.tcp_port > 0 && m_poll.poll(0.005))
-          {
-            checkMainSocket();
-            checkClientSockets();
-          }
-          else if (m_args.tcp_port > 0 && m_client_data_timer.overflow())
-          {
-            char data[100];
-            int len = sprintf(data , "+TPH,%2.2f,%2.2f,%2.2f\r\n",m_comm_module->m_temperature , m_comm_module->m_pressure , m_comm_module->m_humidity); 
-            dispatchToClients(data , len);
-            m_client_data_timer.reset();
           }
           waitForMessages(0.005);
         }
