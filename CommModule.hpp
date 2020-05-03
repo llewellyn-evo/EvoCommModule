@@ -4,7 +4,7 @@
 // DUNE headers.
 #include <DUNE/DUNE.hpp>
 
-#define MAX_CHANNELS	5	
+#define MAX_CHANNELS	5
 
 typedef struct{
   std::string name;
@@ -26,7 +26,7 @@ namespace Power
       public:
       //! Channel 0 = Wifi || Channel 1 = XBEE || Channel 2 = GPS || Channel 3 = ATMCLK || Channel 4 = GSM/SAT
       const char *COMMANDS[MAX_CHANNELS] = { "WIFI_SW", "XBEE_SW", "GPS_SW", "ATM_CLK_SW" , "SAT_GSM_SW" };
-      //! GPIO Channels 
+      //! GPIO Channels
       DUNE::Hardware::GPIO* m_gpio[MAX_CHANNELS];
       //! Temperature Pressure Humidity
       float m_temperature , m_pressure , m_humidity;
@@ -40,7 +40,7 @@ namespace Power
       SerialPort* m_handle;
       //! Create channels array
       Channels* m_channels;
-      
+
       CommModule(Tasks::Task* task ,SerialPort* handle, Channels* channels):
       BasicModem(task, handle),
       m_task(task),
@@ -53,7 +53,6 @@ namespace Power
           m_task->inf("Channel Number %d , Name %s , Reset Pin %d , resetActive %u\r\n" , i , m_channels[i].name.c_str() , m_channels[i].reset_pin , m_channels[i].reset_active );
           if (m_channels[i].reset_pin > -1)
           {
-
             m_gpio[i] = new DUNE::Hardware::GPIO(m_channels[i].reset_pin);
             m_gpio[i]->setDirection("output");
             m_gpio[i]->setValue((m_channels[i].reset_active) ? false:true);
@@ -67,7 +66,7 @@ namespace Power
         start();
       }
 
-      uint8_t 
+      uint8_t
       setChannel(uint8_t number , uint8_t state)
       {
         if (number < MAX_CHANNELS)
@@ -82,11 +81,11 @@ namespace Power
           catch (...)
           {
             return 1;
-          } 
+          }
         }
         return 0;
       }
-      
+
       void
       pollSerialInput()
       {
@@ -152,7 +151,7 @@ namespace Power
         }
         catch ( ... )
         {
-          //! timeout in reading serial. 
+          //! timeout in reading serial.
         }
       }
     };

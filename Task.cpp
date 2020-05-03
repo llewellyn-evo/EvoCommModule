@@ -45,7 +45,7 @@ namespace Power
       std::string uart_dev;
       //! Serial port baud rate.
       unsigned uart_baud;
-      //! Array of channels 
+      //! Array of channels
       Channels channel[MAX_CHANNELS];
     };
 
@@ -123,7 +123,7 @@ namespace Power
       void
       onResourceInitialization(void)
       {
-        
+
       }
 
       //! Release resources.
