@@ -54,7 +54,7 @@ namespace Power
       //! Constructor.
       //! @param[in] name task name.
       //! @param[in] ctx context.
-      CommModule* m_comm_module = NULL;
+      CommModule* m_comm_module;
       //! Arguments for the task
       Arguments m_args;
       //! Serial port handle.
@@ -186,5 +186,4 @@ namespace Power
     };
   }
 }
-
 DUNE_TASK

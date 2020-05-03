@@ -23,16 +23,29 @@ namespace Power
     using DUNE_NAMESPACES;
     class CommModule :  public BasicModem
     {
-      public: 
+      public:
+      //! Channel 0 = Wifi || Channel 1 = XBEE || Channel 2 = GPS || Channel 3 = ATMCLK || Channel 4 = GSM/SAT
+      const char *COMMANDS[MAX_CHANNELS] = { "WIFI_SW", "XBEE_SW", "GPS_SW", "ATM_CLK_SW" , "SAT_GSM_SW" };
+      //! GPIO Channels 
+      DUNE::Hardware::GPIO* m_gpio[MAX_CHANNELS];
+      //! Temperature Pressure Humidity
+      float m_temperature , m_pressure , m_humidity;
+      //! Power voltage read, 5V voltage read
+      float m_vin_voltage , m_5v_voltage;
+      //! epoch of last serial querry
+      double m_last_serial_querry;
+      //! Pointer to task
+      Tasks::Task* m_task;
+      //! Serial port handle.
+      SerialPort* m_handle;
       //! Create channels array
       Channels* m_channels;
       
-
       CommModule(Tasks::Task* task ,SerialPort* handle, Channels* channels):
+      BasicModem(task, handle),
       m_task(task),
       m_handle(handle),
-      m_channels(channels),
-      BasicModem(task, handle)
+      m_channels(channels)
       {
       	m_handle->flushInput();
         for (uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
@@ -48,10 +61,10 @@ namespace Power
           setChannel(i , m_channels[i].default_state);
         }
         setReadMode(READ_MODE_LINE);
-        start();
         setLineTrim(true);
         setLineTermIn("\r\n");
         setTimeout(0.1);
+        start();
       }
 
       uint8_t 
@@ -82,7 +95,6 @@ namespace Power
           m_handle->write("STATUS_WORD?\r\n" , 14);
           m_last_serial_querry = Clock::getSinceEpoch();
         }
-
         try
         {
           std::string line = readLine();
@@ -118,79 +130,29 @@ namespace Power
             uint32_t status_value;
             if (std::sscanf(line.c_str() , "* STATUS: WORD=%x" , &status_value) == 1)
             {
-              decodeStatusWord(status_value);
+              m_channels[0].state = (status_value >> 8) & 0x01; //! WIFI
+              m_channels[1].state = status_value & 0x01;        //! XBEE
+              m_channels[2].state = (status_value >> 5) & 0x01; //! GPS
+              m_channels[3].state = (status_value >> 4) & 0x01; //! ATM_CLK
+              m_channels[4].state = (status_value >> 6) & 0x01; //! SAT_GSM
             }
           }
           else if (line.find("* FAULTS:") != std::string::npos)
           {
             uint32_t fault_value;
-            if (std::sscanf(line.c_str() , "* FAULTS: WORD=%x" , &status_value) == 1)
+            if (std::sscanf(line.c_str() , "* FAULTS: WORD=%x" , &fault_value) == 1)
             {
-              decodeFaultWord(status_value);
+              m_channels[0].fault = (fault_value >> 8) & 0x01;  //! WIFI
+              m_channels[1].fault = fault_value & 0x01;         //! XBEE
+              m_channels[2].fault = (fault_value >> 5) & 0x01;  //! GPS
+              m_channels[3].fault = (fault_value >> 4) & 0x01;  //! ATM_CLK
+              m_channels[4].fault = (fault_value >> 6) & 0x01;  //! SAT_GSM
             }
           }
         }
         catch ( ... )
         {
           //! timeout in reading serial. 
-        }
-      }
-
-
-      private:
-      //! Channel 0 = Wifi
-      //! Channel 1 = XBEE
-      //! Channel 2 = GPS
-      //! Channel 3 = ATMCLK
-      //! Channel 4 = GSM/SAT
-      const char *COMMANDS[MAX_CHANNELS] = { "WIFI_SW", "XBEE_SW", "GPS_SW", "ATM_CLK_SW" , "SAT_GSM_SW" };
-      //! Pointer to task
-      Tasks::Task* m_task;
-      //! Serial port handle.
-      SerialPort* m_handle;
-      //! GPIO Channels 
-      DUNE::Hardware::GPIO* m_gpio[MAX_CHANNELS];
-      //! Temperature Pressure Humidity
-      float m_temperature , m_pressure , m_humidity;
-      //! Power voltage read, 5V voltage read
-      float m_vin_voltage , m_5v_voltage;
-      //! epoch of last serial update
-      double m_last_serial_querry;
-
-
-      void 
-      decodeStatusWord(uint32_t val)
-      {
-        for (uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
-        {
-          if (i == 0) //! WIFI
-            m_channels[i].state = (val >> 8) & 0x01;
-          else if (i == 1)  //! XBEE
-            m_channels[i].state = val & 0x01;
-          else if (i == 2) //! GPS
-            m_channels[i].state = (val >> 5) & 0x01;
-          else if (i == 3)//! ATM_CLK
-            m_channels[i].state = (val >> 4) & 0x01;
-          else if (i == 4)//! SAT_GSM
-            m_channels[i].state = (val >> 6) & 0x01;
-        }
-      }
-
-      void
-      decodeFaultWord(uint8_t val)
-      {
-        for (uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
-        {
-          if (i == 0) //! WIFI
-            m_channels[i].fault = (val >> 8) & 0x01;
-          else if (i == 1)  //! XBEE
-            m_channels[i].fault = val & 0x01;
-          else if (i == 2) //! GPS
-            m_channels[i].fault = (val >> 5) & 0x01;
-          else if (i == 3)//! ATM_CLK
-            m_channels[i].fault = (val >> 4) & 0x01;
-          else if (i == 4)//! SAT_GSM
-            m_channels[i].fault = (val >> 6) & 0x01;
         }
       }
     };
