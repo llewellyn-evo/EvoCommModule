@@ -141,7 +141,7 @@ namespace Power
         {
           IMC::PowerChannelState resp;
           resp.name = m_comm_module->m_channels[i].name;
-          resp.state = (m_comm_module->m_channels[i].state) ? 1:0;
+          resp.state = m_comm_module->m_channels[i].state;
           dispatch(resp);
         }
       }
@@ -158,13 +158,13 @@ namespace Power
               case IMC::PowerChannelControl::PCC_OP_TURN_ON:
               case IMC::PowerChannelControl::PCC_OP_SCHED_ON:
                 //! Set Swtich ON
-                m_comm_module->setChannel(i , true);
+                m_comm_module->setChannel(i , 1);
                 break;
 
               case IMC::PowerChannelControl::PCC_OP_TURN_OFF:
               case IMC::PowerChannelControl::PCC_OP_SCHED_OFF:
                 //! Set Switch OFF
-                m_comm_module->setChannel(i , false);
+                m_comm_module->setChannel(i , 0);
                 break;
               default:
                 break;
@@ -179,11 +179,8 @@ namespace Power
       {
         while (!stopping())
         {
-          if (m_comm_module->pollSerialInput())
-          {
-            setEntityState(IMC::EntityState::ESTA_ERROR, Utils::String::str(DTR("Serial Error")));
-          }
-          waitForMessages(0.005);
+          m_comm_module->pollSerialInput();
+          waitForMessages(0.5);
         }
       }
     };

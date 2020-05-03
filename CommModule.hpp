@@ -12,7 +12,8 @@ typedef struct{
   bool default_state;
   uint64_t reset_delay;
   uint8_t reset_active;
-  bool state;
+  uint8_t state;
+  uint8_t fault;
 }Channels;
 
 namespace Power
@@ -20,35 +21,18 @@ namespace Power
   namespace EvoCommModule
   {
     using DUNE_NAMESPACES;
-    class CommModule
+    class CommModule :  public BasicModem
     {
-      public:
-      //! Needs to be changed when cortex firmware is changed
-      //! For now 
-      //! Channel 0 = Wifi
-      //! Channel 1 = XBEE
-      //! Channel 2 = GPS
-      //! Channel 3 = ATMCLK
-      //! Channel 4 = GSM/SAT
-      uint8_t ONCOMMAND[MAX_CHANNELS] = {'W' , 'X' , 'G' , 'C' , 'S'};
-      uint8_t OFFCOMMAND[MAX_CHANNELS] =  {'w' , 'x' , 'g' , 'c' , 's'};
-      //! Pointer to task
-      Tasks::Task* m_task;
-      //! Serial port handle.
-      SerialPort* m_handle;
+      public: 
       //! Create channels array
       Channels* m_channels;
-      //! GPIO Channels 
-      DUNE::Hardware::GPIO* m_gpio[MAX_CHANNELS];
-      //! Temperature Pressure Humidity
-      double m_temperature , m_pressure , m_humidity;
-      //! epoch of last serial update
-      double m_last_serial_update;
+      
 
       CommModule(Tasks::Task* task ,SerialPort* handle, Channels* channels):
       m_task(task),
       m_handle(handle),
-      m_channels(channels)
+      m_channels(channels),
+      BasicModem(task, handle)
       {
       	m_handle->flushInput();
         for (uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
@@ -61,23 +45,26 @@ namespace Power
             m_gpio[i]->setDirection("output");
             m_gpio[i]->setValue((m_channels[i].reset_active) ? false:true);
           }
-          m_channels[i].state = false;
           setChannel(i , m_channels[i].default_state);
         }
+        setReadMode(READ_MODE_LINE);
+        start();
+        setLineTrim(true);
+        setLineTermIn("\r\n");
+        setTimeout(0.1);
       }
 
       uint8_t 
-      setChannel(uint8_t number , bool state)
+      setChannel(uint8_t number , uint8_t state)
       {
         if (number < MAX_CHANNELS)
         {
           try
           {
-            uint8_t bfr[5];
-            int n = sprintf((char*) bfr , "%c\r\n" , (state) ? ONCOMMAND[number]:OFFCOMMAND[number]);
+            uint8_t bfr[20];
+            int n = sprintf((char*) bfr , "%s=%d\r\n" ,COMMANDS[number], state);
             bfr[n] = '\0';
             m_handle->write(bfr , n);
-            m_channels[number].state = state;
           }
           catch (...)
           {
@@ -86,64 +73,125 @@ namespace Power
         }
         return 0;
       }
-      //! This needs to change once firmware for Cortex is finalised
-      uint8_t
+      
+      void
       pollSerialInput()
       {
-      	static uint8_t bfr[256];
-        static uint8_t index = 0;
-        static bool found = false;
-        uint8_t chr[1];
-      	if (Poll::poll(*m_handle, 0.005))
+        if ((Clock::getSinceEpoch() - m_last_serial_querry) > 10.0)
         {
-          m_handle->read(chr, 1);
-          if (chr[0] == 'T' && !found)
-          {
-            index = 0;
-            found = true;
-          }
+          m_handle->write("STATUS_WORD?\r\n" , 14);
+          m_last_serial_querry = Clock::getSinceEpoch();
+        }
 
-          if (found)
+        try
+        {
+          std::string line = readLine();
+          //! * BME280: T=36.97 P=101133.94 H=15.18
+          if (line.find("* BME280:") != std::string::npos)
           {
-            bfr[index++] = chr[0];
-          }
-          if (chr[0] == '\n' && found)
-          {
-            index = 0;
-            found = false;
-            if (!strncmp((char*)bfr , "TPH:", 4))
+            if (std::sscanf(line.c_str() , "* BME280: T=%f P=%f H=%f", &m_temperature , &m_pressure , &m_humidity ) == 3)
             {
-              std::string s((char*)bfr);
-              std::vector<std::string> tokens;
-              std::istringstream ss(s);
-              std::string token;
-              while(std::getline(ss, token, ' '))
-              {
-                tokens.push_back(token);
-              }
-              if (tokens.size() > 3)
-              {
-                IMC::RelativeHumidity hum;
-                IMC::Temperature temp;
-                IMC::Pressure pres;
-                temp.value = m_temperature = std::stod(tokens[1]);
-                m_task->dispatch(temp);
-                m_pressure = std::stod(tokens[2]);
-                pres.value = m_pressure / 100.0;
-                m_task->dispatch(pres);
-                hum.value = m_humidity = std::stod(tokens[3]);
-                m_task->dispatch(hum);
-                m_last_serial_update = Clock::getSinceEpoch();
-              }
-            }   
+              IMC::RelativeHumidity hum;
+              IMC::Temperature temp;
+              IMC::Pressure pres;
+              temp.value = m_temperature;
+              m_task->dispatch(temp);
+              pres.value = m_pressure / 100.0;
+              m_task->dispatch(pres);
+              hum.value = m_humidity;
+              m_task->dispatch(hum);
+            }
+          }
+          //! * ADC: VIN_MON=16.503 5V_MON=4.728
+          else if (line.find("* ADC:") != std::string::npos)
+          {
+            if (std::sscanf(line.c_str() , "* ADC: VIN_MON=%f 5V_MON=%f", &m_vin_voltage , &m_5v_voltage) == 2)
+            {
+              IMC::Voltage volt;
+              volt.value = m_vin_voltage;
+              m_task->dispatch(volt);
+            }
+          }
+          //! * STATUS: WORD=0185
+          else if (line.find("* STATUS:") != std::string::npos)
+          {
+            uint32_t status_value;
+            if (std::sscanf(line.c_str() , "* STATUS: WORD=%x" , &status_value) == 1)
+            {
+              decodeStatusWord(status_value);
+            }
+          }
+          else if (line.find("* FAULTS:") != std::string::npos)
+          {
+            uint32_t fault_value;
+            if (std::sscanf(line.c_str() , "* FAULTS: WORD=%x" , &status_value) == 1)
+            {
+              decodeFaultWord(status_value);
+            }
           }
         }
-        else if ((Clock::getSinceEpoch() - m_last_serial_update) > 5.0 )
+        catch ( ... )
         {
-          return 1;
+          //! timeout in reading serial. 
         }
+      }
 
-        return 0;
+
+      private:
+      //! Channel 0 = Wifi
+      //! Channel 1 = XBEE
+      //! Channel 2 = GPS
+      //! Channel 3 = ATMCLK
+      //! Channel 4 = GSM/SAT
+      const char *COMMANDS[MAX_CHANNELS] = { "WIFI_SW", "XBEE_SW", "GPS_SW", "ATM_CLK_SW" , "SAT_GSM_SW" };
+      //! Pointer to task
+      Tasks::Task* m_task;
+      //! Serial port handle.
+      SerialPort* m_handle;
+      //! GPIO Channels 
+      DUNE::Hardware::GPIO* m_gpio[MAX_CHANNELS];
+      //! Temperature Pressure Humidity
+      float m_temperature , m_pressure , m_humidity;
+      //! Power voltage read, 5V voltage read
+      float m_vin_voltage , m_5v_voltage;
+      //! epoch of last serial update
+      double m_last_serial_querry;
+
+
+      void 
+      decodeStatusWord(uint32_t val)
+      {
+        for (uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
+        {
+          if (i == 0) //! WIFI
+            m_channels[i].state = (val >> 8) & 0x01;
+          else if (i == 1)  //! XBEE
+            m_channels[i].state = val & 0x01;
+          else if (i == 2) //! GPS
+            m_channels[i].state = (val >> 5) & 0x01;
+          else if (i == 3)//! ATM_CLK
+            m_channels[i].state = (val >> 4) & 0x01;
+          else if (i == 4)//! SAT_GSM
+            m_channels[i].state = (val >> 6) & 0x01;
+        }
+      }
+
+      void
+      decodeFaultWord(uint8_t val)
+      {
+        for (uint8_t i = 0 ; i < MAX_CHANNELS ; i++)
+        {
+          if (i == 0) //! WIFI
+            m_channels[i].fault = (val >> 8) & 0x01;
+          else if (i == 1)  //! XBEE
+            m_channels[i].fault = val & 0x01;
+          else if (i == 2) //! GPS
+            m_channels[i].fault = (val >> 5) & 0x01;
+          else if (i == 3)//! ATM_CLK
+            m_channels[i].fault = (val >> 4) & 0x01;
+          else if (i == 4)//! SAT_GSM
+            m_channels[i].fault = (val >> 6) & 0x01;
+        }
       }
     };
   }
