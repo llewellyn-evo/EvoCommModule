@@ -46,7 +46,11 @@ namespace Power
       //! Serial port baud rate.
       unsigned uart_baud;
       //! Array of channels
-      Channels channel[MAX_CHANNELS];
+      std::vector<channel_info> channels;
+      //! Period for Status Querry
+      double querry_period;
+      //! Period to dispatch imc Messages
+      double imc_message_period;
     };
 
     struct Task: public DUNE::Tasks::Task
@@ -59,11 +63,17 @@ namespace Power
       Arguments m_args;
       //! Serial port handle.
       SerialPort* m_handle;
+      //! Timer for Status Querry
+      DUNE::Time::Counter<double> m_status_querry_timer;
+      //! Timer to Disapatch  IMC Messages
+      DUNE::Time::Counter<double> m_imc_data_dispatch_timer;
+      //! Max number of seconds to consider stale data
+      const uint8_t c_max_seconds = 10;
 
       Task(const std::string& name, Tasks::Context& ctx):
-        DUNE::Tasks::Task(name, ctx),
-        m_comm_module(NULL),
-        m_handle(NULL)
+      DUNE::Tasks::Task(name, ctx),
+      m_comm_module(NULL),
+      m_handle(NULL)
       {
         param("Serial Port - Device", m_args.uart_dev)
         .defaultValue("/dev/ttymxc6")
@@ -73,117 +83,201 @@ namespace Power
         .defaultValue("115200")
         .description("Serial port baud rate");
 
-        for (unsigned i = 0; i < MAX_CHANNELS; ++i)
+        param("Status Querry Period", m_args.querry_period)
+        .defaultValue("10")
+        .description("Period at which to querry status of Switches");
+
+        param("IMC Message Disapatch Period", m_args.imc_message_period)
+        .defaultValue("5")
+        .description("Period at which to dispatch imc messages");
+
+        for (unsigned i = 0; i < c_max_allowed_channels ; ++i)
         {
-          param(String::str("Channel %u Name", i), m_args.channel[i].name)
+          channel_info channel;
+          int reset = -1;
+
+          param(String::str("Channel %u Name", i), channel.name)
           .defaultValue("channel")
           .description("Channel Name");
 
-          param(String::str("Channel %u Reset Pin", i), m_args.channel[i].reset_pin)
+          param(String::str("Channel %u Reset Pin", i), reset)
           .defaultValue("-1")
           .description("Channel reset pin");
 
-          param(String::str("Channel %u Reset Delay", i), m_args.channel[i].reset_delay)
-          .defaultValue("1000")
-          .description("Channel reset delay");
-
-          param(String::str("Channel %u Reset Active", i), m_args.channel[i].reset_active)
-          .defaultValue("1")
-          .description("Channel reset active");
-
-          param(String::str("Channel %u Default", i), m_args.channel[i].default_state)
+          param(String::str("Channel %u Default", i), channel.default_state)
           .defaultValue("false")
           .description("Channel default state");
+
+          if (reset)
+          {
+            channel.reset_gpio = new DUNE::Hardware::GPIO(reset);
+
+            param(String::str("Channel %u Reset Delay", i), channel.reset_delay)
+            .defaultValue("1000")
+            .description("Channel reset delay");
+
+            param(String::str("Channel %u Reset Active", i), channel.reset_active)
+            .defaultValue("1")
+            .description("Channel reset active");
+          }
+
+          if (!channel.name.empty())
+          {
+            m_args.channels.push_back(channel);
+          }
         }
         bind<IMC::PowerChannelControl>(this);
         bind<IMC::QueryPowerChannelState>(this);
       }
 
-      //! Acquire resources.
+       //! Update internal state with new parameter values.
       void
-      onResourceAcquisition(void)
+      onUpdateParameters(void)
       {
-        try
+        if (m_comm_module)
         {
-          if (!m_handle)
-            m_handle = new SerialPort(m_args.uart_dev, m_args.uart_baud);
-        }
-        catch (...)
-        {
-          throw RestartNeeded(DTR(Status::getString(CODE_COM_ERROR)), 5);
-        }
+          if (paramChanged(m_args.uart_dev) || paramChanged(m_args.uart_baud))
+          {
+            throw RestartNeeded(DTR("restarting to change parameters"), 1);
+          }
+          else if (paramChanged(m_args.querry_period))
+          {
+            m_status_querry_timer.setTop(m_args.querry_period);
+          }
+          else if (paramChanged(m_args.imc_message_period))
+          {
+           m_imc_data_dispatch_timer.setTop(m_args.imc_message_period);
+         }
+       }
+     }
 
-        if (!m_comm_module)
-        {
-          m_comm_module = new CommModule(this , m_handle , m_args.channel);
-        }
+      //! Acquire resources.
+     void
+     onResourceAcquisition(void)
+     {
+      try
+      {
+        if (!m_handle)
+          m_handle = new SerialPort(m_args.uart_dev, m_args.uart_baud);
       }
+      catch (...)
+      {
+        throw RestartNeeded(DTR(Status::getString(CODE_COM_ERROR)), 5);
+      }
+
+      if (!m_comm_module)
+      {
+        m_comm_module = new CommModule(this , m_handle , m_args.channels);
+      }
+
+      m_status_querry_timer.setTop(m_args.querry_period);
+      m_imc_data_dispatch_timer.setTop(m_args.imc_message_period);
+    }
 
       //! Initialize resources.
-      void
-      onResourceInitialization(void)
-      {
+    void
+    onResourceInitialization(void)
+    {
 
-      }
+    }
 
       //! Release resources.
-      void
-      onResourceRelease(void)
+    void
+    onResourceRelease(void)
+    {
+    }
+
+
+    void
+    consume(const IMC::QueryPowerChannelState* msg)
+    {
+      (void)msg;
+      for (uint8_t i = 0; i < m_comm_module->m_channels.size(); i++)
       {
+        IMC::PowerChannelState resp;
+        resp.name = m_comm_module->m_channels[i].name;
+        resp.state = m_comm_module->m_channels[i].state;
+        dispatch(resp);
+      }
+    }
+
+    void
+    checkTimers()
+    {
+      if (m_status_querry_timer.overflow())
+      {
+        if (m_comm_module->pollStatus())
+        {
+          err("Error in Getting status of Switches");
+        }
+        m_status_querry_timer.reset();
       }
 
-
-      void
-      consume(const IMC::QueryPowerChannelState* msg)
+      if (m_imc_data_dispatch_timer.overflow() && (Clock::getSinceEpoch() - m_comm_module->m_last_valid_serial_update) < c_max_seconds)
       {
-        (void)msg;
-        for (uint8_t i = 0; i < MAX_CHANNELS; i++)
+       IMC::RelativeHumidity hum;
+       IMC::Temperature temp;
+       IMC::Pressure pres;
+       IMC::Voltage volt;
+
+       temp.value = m_comm_module->m_temperature;
+       dispatch(temp);
+       pres.value = m_comm_module->m_pressure / 100.0;
+       dispatch(pres);
+       hum.value = m_comm_module->m_humidity;
+       dispatch(hum);
+
+       volt.value = m_comm_module->m_vin_voltage;
+       dispatch(volt);
+
+       m_imc_data_dispatch_timer.reset();
+     }
+   }
+
+   void
+   consume(const IMC::PowerChannelControl* msg)
+   {
+    for (uint8_t i = 0; i < m_comm_module->m_channels.size() ; i++)
+    {
+      if (m_comm_module->m_channels[i].name == msg->name)
+      {
+        switch (msg->op)
         {
-          IMC::PowerChannelState resp;
-          resp.name = m_comm_module->m_channels[i].name;
-          resp.state = m_comm_module->m_channels[i].state;
-          dispatch(resp);
+          case IMC::PowerChannelControl::PCC_OP_TURN_ON:
+            //! Set Swtich ON
+            m_comm_module->setChannel(i , 1);
+          break;
+
+          case IMC::PowerChannelControl::PCC_OP_TURN_OFF:
+            //! Set Switch OFF
+            m_comm_module->setChannel(i , 0);
+          break;
+
+          case IMC::PowerChannelControl::PCC_OP_SCHED_ON:
+          case IMC::PowerChannelControl::PCC_OP_SCHED_OFF:
+            err("Scheduled ON/OFF Operation not supported");
+          break;
+
+          default:
+          break;
         }
       }
-
-      void
-      consume(const IMC::PowerChannelControl* msg)
-      {
-        for (uint8_t i = 0; i < MAX_CHANNELS; i++)
-        {
-          if (m_args.channel[i].name == msg->name)
-          {
-            switch (msg->op)
-            {
-              case IMC::PowerChannelControl::PCC_OP_TURN_ON:
-              case IMC::PowerChannelControl::PCC_OP_SCHED_ON:
-                //! Set Swtich ON
-                m_comm_module->setChannel(i , 1);
-                break;
-
-              case IMC::PowerChannelControl::PCC_OP_TURN_OFF:
-              case IMC::PowerChannelControl::PCC_OP_SCHED_OFF:
-                //! Set Switch OFF
-                m_comm_module->setChannel(i , 0);
-                break;
-              default:
-                break;
-            }
-          }
-        }
-      }
+    }
+  }
 
       //! Main loop.
-      void
-      onMain(void)
-      {
-        while (!stopping())
-        {
-          m_comm_module->pollSerialInput();
-          waitForMessages(0.5);
-        }
-      }
-    };
+  void
+  onMain(void)
+  {
+    while (!stopping())
+    {
+      checkTimers();
+      m_comm_module->pollStatus();
+      m_comm_module->pollSerialInput();
+      waitForMessages(0.5);
+    }
   }
+};
+}
 }
 DUNE_TASK
