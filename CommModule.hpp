@@ -58,9 +58,19 @@ namespace Power
             m_channels[i].reset_gpio->setDirection("output");
             m_channels[i].reset_gpio->setValue((m_channels[i].reset_active) ? false:true);
           }
-          setChannel(i , m_channels[i].default_state);
+          if (setChannel(i , m_channels[i].default_state))
+          {
+            m_task->err("Error in setting channel value");
+          }
         }
-        m_parser = new DUNE::Utils::LineParser("\r\n");
+        try
+        {
+          m_parser = new DUNE::Utils::LineParser("\r\n");
+        }
+        catch (...)
+        {
+          m_task->err("Invalid EOL for Line Parser");
+        }
       }
 
       uint8_t
@@ -93,7 +103,7 @@ namespace Power
         return 0;
       }
 
-      void
+      uint8_t
       pollSerialInput()
       {
         try
@@ -109,8 +119,9 @@ namespace Power
         }
         catch ( ... )
         {
-          m_task->err("Error in reading serial Data");
+          return 1;
         }
+        return 0;
       }
 
       void

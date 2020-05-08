@@ -146,138 +146,143 @@ namespace Power
           }
           else if (paramChanged(m_args.imc_message_period))
           {
-           m_imc_data_dispatch_timer.setTop(m_args.imc_message_period);
-         }
-       }
-     }
+            m_imc_data_dispatch_timer.setTop(m_args.imc_message_period);
+          }
+        }
+      }
 
       //! Acquire resources.
-     void
-     onResourceAcquisition(void)
-     {
-      try
+      void
+      onResourceAcquisition(void)
       {
-        if (!m_handle)
-          m_handle = new SerialPort(m_args.uart_dev, m_args.uart_baud);
-      }
-      catch (...)
-      {
-        throw RestartNeeded(DTR(Status::getString(CODE_COM_ERROR)), 5);
-      }
+        try
+        {
+          if (!m_handle)
+            m_handle = new SerialPort(m_args.uart_dev, m_args.uart_baud);
+        }
+        catch (...)
+        {
+          throw RestartNeeded(DTR(Status::getString(CODE_COM_ERROR)), 5);
+        }
 
-      if (!m_comm_module)
-      {
-        m_comm_module = new CommModule(this , m_handle , m_args.channels);
-      }
+        if (!m_comm_module)
+        {
+          m_comm_module = new CommModule(this , m_handle , m_args.channels);
+        }
 
-      m_status_querry_timer.setTop(m_args.querry_period);
-      m_imc_data_dispatch_timer.setTop(m_args.imc_message_period);
-    }
+        m_status_querry_timer.setTop(m_args.querry_period);
+        m_imc_data_dispatch_timer.setTop(m_args.imc_message_period);
+      }
 
       //! Initialize resources.
-    void
-    onResourceInitialization(void)
-    {
-
-    }
+      void
+      onResourceInitialization(void)
+      {
+      }
 
       //! Release resources.
-    void
-    onResourceRelease(void)
-    {
-    }
-
-
-    void
-    consume(const IMC::QueryPowerChannelState* msg)
-    {
-      (void)msg;
-      for (uint8_t i = 0; i < m_comm_module->m_channels.size(); i++)
+      void
+      onResourceRelease(void)
       {
-        IMC::PowerChannelState resp;
-        resp.name = m_comm_module->m_channels[i].name;
-        resp.state = m_comm_module->m_channels[i].state;
-        dispatch(resp);
-      }
-    }
-
-    void
-    checkTimers()
-    {
-      if (m_status_querry_timer.overflow())
-      {
-        if (m_comm_module->pollStatus())
-        {
-          err("Error in Getting status of Switches");
-        }
-        m_status_querry_timer.reset();
       }
 
-      if (m_imc_data_dispatch_timer.overflow() && (Clock::getSinceEpoch() - m_comm_module->m_last_valid_serial_update) < c_max_seconds)
+
+      void
+      consume(const IMC::QueryPowerChannelState* msg)
       {
-       IMC::RelativeHumidity hum;
-       IMC::Temperature temp;
-       IMC::Pressure pres;
-       IMC::Voltage volt;
-
-       temp.value = m_comm_module->m_temperature;
-       dispatch(temp);
-       pres.value = m_comm_module->m_pressure / 100.0;
-       dispatch(pres);
-       hum.value = m_comm_module->m_humidity;
-       dispatch(hum);
-
-       volt.value = m_comm_module->m_vin_voltage;
-       dispatch(volt);
-
-       m_imc_data_dispatch_timer.reset();
-     }
-   }
-
-   void
-   consume(const IMC::PowerChannelControl* msg)
-   {
-    for (uint8_t i = 0; i < m_comm_module->m_channels.size() ; i++)
-    {
-      if (m_comm_module->m_channels[i].name == msg->name)
-      {
-        switch (msg->op)
+        (void)msg;
+        for (uint8_t i = 0; i < m_comm_module->m_channels.size(); i++)
         {
-          case IMC::PowerChannelControl::PCC_OP_TURN_ON:
-            //! Set Swtich ON
-            m_comm_module->setChannel(i , 1);
-          break;
-
-          case IMC::PowerChannelControl::PCC_OP_TURN_OFF:
-            //! Set Switch OFF
-            m_comm_module->setChannel(i , 0);
-          break;
-
-          case IMC::PowerChannelControl::PCC_OP_SCHED_ON:
-          case IMC::PowerChannelControl::PCC_OP_SCHED_OFF:
-            err("Scheduled ON/OFF Operation not supported");
-          break;
-
-          default:
-          break;
+          IMC::PowerChannelState resp;
+          resp.name = m_comm_module->m_channels[i].name;
+          resp.state = m_comm_module->m_channels[i].state;
+          dispatch(resp);
         }
       }
-    }
-  }
+
+      void
+      checkTimers()
+      {
+        if (m_status_querry_timer.overflow())
+        {
+          if (m_comm_module->pollStatus())
+          {
+            err("Error in Getting status of Switches");
+          }
+          m_status_querry_timer.reset();
+        }
+
+        if (m_imc_data_dispatch_timer.overflow() && (Clock::getSinceEpoch() - m_comm_module->m_last_valid_serial_update) < c_max_seconds)
+        {
+          IMC::RelativeHumidity hum;
+          IMC::Temperature temp;
+          IMC::Pressure pres;
+          IMC::Voltage volt;
+
+          temp.value = m_comm_module->m_temperature;
+          dispatch(temp);
+          pres.value = m_comm_module->m_pressure / 100.0;
+          dispatch(pres);
+          hum.value = m_comm_module->m_humidity;
+          dispatch(hum);
+          volt.value = m_comm_module->m_vin_voltage;
+          dispatch(volt);
+          m_imc_data_dispatch_timer.reset();
+        }
+      }
+
+      void
+      consume(const IMC::PowerChannelControl* msg)
+      {
+        for (uint8_t i = 0; i < m_comm_module->m_channels.size() ; i++)
+        {
+          if (m_comm_module->m_channels[i].name == msg->name)
+          {
+            switch (msg->op)
+            {
+              case IMC::PowerChannelControl::PCC_OP_TURN_ON:
+                //! Set Swtich ON
+                if (m_comm_module->setChannel(i , 1))
+                {
+                  err("Error in setting channel value");
+                }
+              break;
+
+              case IMC::PowerChannelControl::PCC_OP_TURN_OFF:
+                //! Set Switch OFF
+                if (m_comm_module->setChannel(i , 0))
+                {
+                  err("Error in setting channel value");
+                }
+              break;
+
+              case IMC::PowerChannelControl::PCC_OP_SCHED_ON:
+              case IMC::PowerChannelControl::PCC_OP_SCHED_OFF:
+                err("Scheduled ON/OFF Operation not supported");
+              break;
+
+              default:
+              break;
+            }
+          }
+        }
+      }
 
       //! Main loop.
-  void
-  onMain(void)
-  {
-    while (!stopping())
-    {
-      checkTimers();
-      m_comm_module->pollStatus();
-      m_comm_module->pollSerialInput();
-      waitForMessages(0.5);
-    }
+      void
+      onMain(void)
+      {
+        while (!stopping())
+        {
+          checkTimers();
+          if (m_comm_module->pollSerialInput())
+          {
+            err("Error in reading data from serial port");
+          }
+          waitForMessages(0.5);
+        }
+      }
+    };
   }
-};
-}
 }
 DUNE_TASK
