@@ -6,18 +6,19 @@
 #include <DUNE/Utils/LineParser.hpp>
 #include <vector>
 
-const uint8_t c_max_allowed_channels = 5;
+const unsigned c_max_allowed_channels = 5;
 
 struct channel_info
-{
-  std::string name;
-  bool default_state;
-  uint64_t reset_delay;
-  uint8_t reset_active;
-  DUNE::Hardware::GPIO *reset_gpio;
-  bool state;
-  bool fault;
-};
+      {
+        std::string name;
+        bool default_state;
+        uint64_t reset_delay;
+        uint8_t reset_active;
+        int reset_pin;
+        DUNE::Hardware::GPIO *reset_gpio;
+        bool state;
+        bool fault;
+      };
 
 namespace Power
 {
@@ -40,19 +41,17 @@ namespace Power
       //! Serial port handle.
       SerialPort* m_handle;
       //! Create channels array
-      std::vector<channel_info>& m_channels;
+      std::vector<channel_info> m_channels;
       //! Line Parser
       DUNE::Utils::LineParser* m_parser;
 
-      CommModule(Tasks::Task* task ,SerialPort* handle, std::vector<channel_info>& channels):
+      CommModule(Tasks::Task* task ,SerialPort* handle, const std::vector<channel_info>& channels):
       m_task(task),
       m_handle(handle),
       m_channels(channels)
       {
         for (uint8_t i = 0 ; i < m_channels.size() ; i++)
         {
-          m_task->inf("Channel Number %d , Name %s , resetActive %u\r\n" , i , m_channels[i].name.c_str() ,  m_channels[i].reset_active );
-
           if (m_channels[i].reset_gpio != NULL)
           {
             m_channels[i].reset_gpio->setDirection("output");

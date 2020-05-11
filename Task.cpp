@@ -46,7 +46,7 @@ namespace Power
       //! Serial port baud rate.
       unsigned uart_baud;
       //! Array of channels
-      std::vector<channel_info> channels;
+      channel_info channels[c_max_allowed_channels];
       //! Period for Status Querry
       double querry_period;
       //! Period to dispatch imc Messages
@@ -75,6 +75,7 @@ namespace Power
       m_comm_module(NULL),
       m_handle(NULL)
       {
+
         param("Serial Port - Device", m_args.uart_dev)
         .defaultValue("/dev/ttymxc6")
         .description("Serial port device used to communicate with the Power Switch");
@@ -93,38 +94,26 @@ namespace Power
 
         for (unsigned i = 0; i < c_max_allowed_channels ; ++i)
         {
-          channel_info channel;
-          int reset = -1;
 
-          param(String::str("Channel %u Name", i), channel.name)
+          param(String::str("Channel %u Name", i), m_args.channels[i].name)
           .defaultValue("channel")
           .description("Channel Name");
 
-          param(String::str("Channel %u Reset Pin", i), reset)
+          param(String::str("Channel %u Reset Pin", i), m_args.channels[i].reset_pin)
           .defaultValue("-1")
           .description("Channel reset pin");
 
-          param(String::str("Channel %u Default", i), channel.default_state)
+          param(String::str("Channel %u Default", i), m_args.channels[i].default_state)
           .defaultValue("false")
           .description("Channel default state");
 
-          if (reset)
-          {
-            channel.reset_gpio = new DUNE::Hardware::GPIO(reset);
+          param(String::str("Channel %u Reset Delay", i), m_args.channels[i].reset_delay)
+          .defaultValue("1000")
+          .description("Channel reset delay");
 
-            param(String::str("Channel %u Reset Delay", i), channel.reset_delay)
-            .defaultValue("1000")
-            .description("Channel reset delay");
-
-            param(String::str("Channel %u Reset Active", i), channel.reset_active)
-            .defaultValue("1")
-            .description("Channel reset active");
-          }
-
-          if (!channel.name.empty())
-          {
-            m_args.channels.push_back(channel);
-          }
+          param(String::str("Channel %u Reset Active", i), m_args.channels[i].reset_active)
+          .defaultValue("1")
+          .description("Channel reset active");
         }
         bind<IMC::PowerChannelControl>(this);
         bind<IMC::QueryPowerChannelState>(this);
@@ -158,7 +147,9 @@ namespace Power
         try
         {
           if (!m_handle)
+          {
             m_handle = new SerialPort(m_args.uart_dev, m_args.uart_baud);
+          }
         }
         catch (...)
         {
@@ -167,7 +158,14 @@ namespace Power
 
         if (!m_comm_module)
         {
-          m_comm_module = new CommModule(this , m_handle , m_args.channels);
+          for (unsigned i = 0 ; i < c_max_allowed_channels ; i++)
+          {
+            if (m_args.channels[i].reset_pin > -1)
+            {
+               m_args.channels[i].reset_gpio = new DUNE::Hardware::GPIO(m_args.channels[i].reset_pin);
+            }
+          }
+          m_comm_module = new CommModule(this , m_handle , std::vector<channel_info> (m_args.channels, m_args.channels + c_max_allowed_channels));
         }
 
         m_status_querry_timer.setTop(m_args.querry_period);
