@@ -9,16 +9,16 @@
 const unsigned c_max_allowed_channels = 5;
 
 struct channel_info
-      {
-        std::string name;
-        bool default_state;
-        uint64_t reset_delay;
-        uint8_t reset_active;
-        int reset_pin;
-        DUNE::Hardware::GPIO *reset_gpio;
-        bool state;
-        bool fault;
-      };
+{
+  std::string name;
+  bool default_state;
+  uint64_t reset_delay;
+  uint8_t reset_active;
+  int reset_pin;
+  DUNE::Hardware::GPIO *reset_gpio;
+  bool state;
+  bool fault;
+};
 
 namespace Power
 {

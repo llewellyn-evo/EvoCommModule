@@ -94,7 +94,6 @@ namespace Power
 
         for (unsigned i = 0; i < c_max_allowed_channels ; ++i)
         {
-
           param(String::str("Channel %u Name", i), m_args.channels[i].name)
           .defaultValue("channel")
           .description("Channel Name");
